@@ -1,0 +1,94 @@
+# Domain spec — product reviews. Added with zero Python changes: copy this file,
+# edit the blocks, drop a seed file next to it. Demonstrates the config-driven design.
+name: product_reviews
+description: E-commerce product reviews with a star rating, recommendation flag, and sentiment.
+
+seed_file: scripts/inputs/seed_reviews.json
+text_field: review_body                 # field used for dedup + diversity text analysis
+label_fields: [rating, sentiment, recommended]
+
+# Record schema. A Pydantic model is built from this at runtime.
+# Field types: str | int | enum. Common options: min_length, max_length, ge, le,
+# optional (default false), description (shown to the model in the prompt).
+fields:
+  title:
+    type: str
+    min_length: 3
+    max_length: 100
+    description: short review headline
+  review_body:
+    type: str
+    min_length: 30
+    max_length: 1200
+    description: the customer's review, specific and realistic
+  rating:
+    type: int
+    ge: 1
+    le: 5
+    description: star rating 1-5, consistent with the review tone
+  sentiment:
+    type: enum
+    values: [positive, neutral, negative]
+  recommended:
+    type: enum
+    values: ["yes", "no"]
+  product_category:
+    type: enum
+    values: [electronics, home, clothing, beauty, sports, books, other]
+  reviewer_name:
+    type: str
+    min_length: 2
+    max_length: 60
+    description: a plausible full name or username
+  variant:
+    type: str
+    optional: true
+    description: the specific product variant/size/colour, or null if not applicable
+
+# Generation prompt building blocks.
+generation:
+  system: >
+    You generate realistic, varied synthetic e-commerce product reviews for training
+    and testing data-labeling systems. Reviews must read like real shoppers wrote
+    them: specific, varied in tone and length, never templated. The star rating,
+    sentiment, and recommendation must be internally consistent with the review text.
+    Return ONLY valid JSON, no prose.
+  instructions: >
+    Vary tone, length, product_category, rating, and sentiment across the reviews.
+    Mix glowing, mixed, and disappointed reviews. Do not reuse the same reviewer_name.
+  scenario_hints:
+    - wireless earbuds with great sound but poor battery life
+    - a blender that broke after two weeks
+    - a cosy winter jacket that runs a size small
+    - a novel that exceeded expectations
+    - a yoga mat that is thinner than advertised
+    - a fast-charging cable that finally works with an old phone
+    - a skincare serum that caused irritation
+    - a standing desk that was easy to assemble
+    - running shoes that wore out quickly
+    - a coffee machine that is worth every penny
+    - a phone case that doesn't fit despite the listed model
+    - a board game that was a hit at a family gathering
+    - headphones delivered in a damaged box
+    - a kitchen knife set that is sharper than expected
+    - a fitness tracker with inaccurate step counts
+    - a lamp with a warmer light than the photos suggested
+
+# LLM-as-judge config. Dimensions are the integer 1-5 scores the model returns.
+judge:
+  dimensions: [realism, coherence, label_fit]
+  system: >
+    You are a strict data-quality reviewer. Score a single product review on three
+    dimensions, each an integer 1-5 (5 = excellent):
+    - realism: does it read like a real shopper wrote it?
+    - coherence: is the review internally consistent and well-formed?
+    - label_fit: do rating, sentiment, and recommended match the review text?
+    Return ONLY JSON: {"realism": int, "coherence": int, "label_fit": int,
+    "issue": "short note or empty string"}
+
+# Fine-tuning chat export mapping. Each record becomes a chat example with these
+# templates filled from its fields: {field_name} is substituted.
+chat_export:
+  system: Classify the product review. Output its rating, sentiment, and whether it recommends the product.
+  user_template: "{title}\n\n{review_body}"
+  assistant_template: "rating: {rating}\nsentiment: {sentiment}\nrecommended: {recommended}"

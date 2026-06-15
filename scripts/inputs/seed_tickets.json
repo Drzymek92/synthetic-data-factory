@@ -1,0 +1,20 @@
+[
+  {
+    "subject": "Charged twice for my March subscription",
+    "body": "Hi, I just checked my bank statement and I was billed $29.99 twice on March 3rd for my Pro plan. I only have one account. Can you refund the duplicate charge? This is really frustrating because it's the second time it's happened.",
+    "category": "billing",
+    "priority": "high",
+    "sentiment": "negative",
+    "customer_name": "Dana Whitfield",
+    "product": "Pro Plan"
+  },
+  {
+    "subject": "Thanks for the quick fix!",
+    "body": "Just wanted to say your support team sorted out my login issue in under ten minutes. Really impressed with how smooth it was. Keep it up!",
+    "category": "account",
+    "priority": "low",
+    "sentiment": "positive",
+    "customer_name": "Marco Reyes",
+    "product": null
+  }
+]

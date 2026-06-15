@@ -1,0 +1,22 @@
+[
+  {
+    "title": "Great sound, but the battery lets it down",
+    "review_body": "The audio quality on these earbuds genuinely surprised me for the price, deep bass and clear highs. Problem is the battery barely lasts three hours before I'm reaching for the case again. Fine for a commute, frustrating for a long flight.",
+    "rating": 3,
+    "sentiment": "neutral",
+    "recommended": "yes",
+    "product_category": "electronics",
+    "reviewer_name": "Dana Whitfield",
+    "variant": "Charcoal Black"
+  },
+  {
+    "title": "Broke after two weeks, very disappointed",
+    "review_body": "Used this blender maybe five times and the motor started smelling like burning plastic, then it just stopped. For something in this price range I expected it to last more than a fortnight. Reached out to support and I'm still waiting. Would not buy again.",
+    "rating": 1,
+    "sentiment": "negative",
+    "recommended": "no",
+    "product_category": "home",
+    "reviewer_name": "Marco Reyes",
+    "variant": null
+  }
+]

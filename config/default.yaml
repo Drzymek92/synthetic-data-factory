@@ -1,0 +1,27 @@
+# Global, domain-independent settings. Override any value on the CLI.
+# The active domain is loaded from config/domains/<domain>.yaml.
+domain: support_tickets
+
+generation:
+  n_records: 50
+  batch_size: 5
+  temperature: 0.9        # high on purpose — diversity matters more than determinism here
+  seed: 42                # seeds scenario-hint sampling for reproducible runs
+  max_retries: 3          # extra attempts to top up a short/invalid batch
+
+quality:
+  dedup_threshold: 0.92   # cosine similarity at/above which two records are near-duplicates
+  ngram_n: 2              # n for distinct-n lexical diversity
+  run_judge: true         # LLM-as-judge; set false (or --no-judge) to run fully offline
+  judge_sample_size: null # null -> judge every record; int -> sample that many
+  min_quality_score: 3.5  # mean judge score (1-5) for the dataset to "pass"
+
+export:
+  csv: true               # write the dataset as CSV
+  chat_jsonl: true        # write fine-tuning-ready chat JSONL (uses the domain's chat_export block)
+
+model:
+  name: null              # null -> LLM_MODEL from env
+
+paths:
+  output_dir: scripts/outputs

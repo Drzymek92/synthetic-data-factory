@@ -1,0 +1,24 @@
+# environment
+.venv/
+.env
+config/.env
+
+# data — never commit generated outputs or logs
+scripts/outputs/
+logs/
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+
+# credentials — service-account keys must never be committed
+*.json
+*.p12
+
+# allow committed seed/fixture data despite the *.json rule above
+!scripts/inputs/seed_tickets.json
+!scripts/inputs/seed_reviews.json
+!tests/fixtures/*.json

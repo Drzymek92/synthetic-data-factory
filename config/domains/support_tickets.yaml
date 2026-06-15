@@ -1,0 +1,90 @@
+# Domain spec — fully defines a dataset type. Add a new domain by copying this
+# file to config/domains/<name>.yaml and editing it. No Python changes needed.
+name: support_tickets
+description: Customer support tickets with category / priority / sentiment labels.
+
+seed_file: scripts/inputs/seed_tickets.json
+text_field: body                       # field used for dedup + diversity text analysis
+label_fields: [category, priority, sentiment]
+
+# Record schema. A Pydantic model is built from this at runtime.
+# Field types: str | int | enum. Common options: min_length, max_length, ge, le,
+# optional (default false), description (shown to the model in the prompt).
+fields:
+  subject:
+    type: str
+    min_length: 3
+    max_length: 120
+    description: short summary line
+  body:
+    type: str
+    min_length: 20
+    max_length: 1500
+    description: the customer's message, realistic and specific
+  category:
+    type: enum
+    values: [billing, technical, account, shipping, product, other]
+  priority:
+    type: enum
+    values: [low, medium, high, urgent]
+  sentiment:
+    type: enum
+    values: [positive, neutral, negative]
+  customer_name:
+    type: str
+    min_length: 2
+    max_length: 60
+    description: a plausible full name
+  product:
+    type: str
+    optional: true
+    description: the product involved, or null if not applicable
+
+# Generation prompt building blocks.
+generation:
+  system: >
+    You generate realistic, varied synthetic customer-support tickets for training
+    and testing data-labeling systems. Tickets must read like real customers wrote
+    them: specific, varied in tone and length, never templated. Labels must be
+    internally consistent with the body. Return ONLY valid JSON, no prose.
+  instructions: >
+    Vary tone, length, category, priority, and sentiment across the tickets. Do not
+    reuse the same customer_name twice.
+  scenario_hints:
+    - a double charge on a subscription renewal
+    - a password reset email that never arrives
+    - a package marked delivered but not received
+    - a feature request for dark mode
+    - praise for fast support after a quick fix
+    - an app crash on startup after an update
+    - a request to cancel and get a refund
+    - confusion about how to export data
+    - a discount code that won't apply at checkout
+    - a damaged item arriving in the post
+    - a question about upgrading to an annual plan
+    - an account locked after too many login attempts
+    - slow performance when loading large reports
+    - a billing address that cannot be changed
+    - a duplicate account created by mistake
+    - integration with a third-party tool failing
+
+# LLM-as-judge config. `dimensions` are the integer 1-5 scores the model returns;
+# `system` is the reviewer instruction. Domain-specific, so it lives with the domain.
+# Omit this block to run a domain without an LLM-judge stage.
+judge:
+  dimensions: [realism, coherence, label_fit]
+  system: >
+    You are a strict data-quality reviewer. Score a single customer-support ticket
+    on three dimensions, each an integer 1-5 (5 = excellent):
+    - realism: does it read like a real customer wrote it?
+    - coherence: is the body internally consistent and well-formed?
+    - label_fit: do category, priority, and sentiment match the body?
+    Return ONLY JSON: {"realism": int, "coherence": int, "label_fit": int,
+    "issue": "short note or empty string"}
+
+# Fine-tuning chat export mapping. Each record becomes a chat example with these
+# templates filled from its fields: {field_name} is substituted.
+chat_export:
+  system: Classify the customer support ticket. Output its category, priority, and sentiment.
+  user_template: "{subject}\n\n{body}"
+  assistant_template: "category: {category}\npriority: {priority}\nsentiment: {sentiment}"
