@@ -32,10 +32,17 @@ def _api_key() -> str:
     return key
 
 
+def _required(name: str) -> str:
+    value = os.environ.get(name)
+    if not value:
+        raise RuntimeError(f"{name} not set. Add it to config/.env (see config/.env.example).")
+    return value
+
+
 def get_llm(model: str | None = None, temperature: float = DEFAULT_TEMPERATURE, **kwargs) -> ChatOpenAI:
     return ChatOpenAI(
-        model=model or os.environ["LLM_MODEL"],
-        base_url=os.environ["LLM_BASE_URL"],
+        model=model or _required("LLM_MODEL"),
+        base_url=_required("LLM_BASE_URL"),
         api_key=_api_key(),
         temperature=temperature,
         **kwargs,

@@ -3,6 +3,9 @@
 .env
 config/.env
 
+# local agent session notes / validation reports — not for the public repo
+agent/
+
 # data — never commit generated outputs or logs
 scripts/outputs/
 logs/

@@ -71,11 +71,18 @@ def evaluate(records: list[dict], cfg: AppConfig) -> dict:
 
     judged = bool(judge.get("judged"))
     overall = judge.get("overall_mean", 0.0)
-    passed = (not judged) or overall >= qcfg.min_quality_score
-    verdict = (
-        f"{'PASS' if passed else 'REVIEW'} — {len(deduped)} clean records"
-        + (f", mean quality {overall}/5 (threshold {qcfg.min_quality_score})." if judged else ".")
-    )
+    judge_requested = bool(qcfg.run_judge and spec.get("judge"))
+    if judge_requested and not judged:
+        # Judge was asked for but scored nothing (e.g. every call errored) — don't let
+        # a silent judge outage read as PASS the way an intentionally-disabled judge does.
+        logger.warning("Judge was enabled but scored 0 records — dataset is unjudged.")
+        verdict = f"REVIEW — judge enabled but produced no scores ({len(deduped)} records, unjudged)."
+    else:
+        passed = (not judged) or overall >= qcfg.min_quality_score
+        verdict = (
+            f"{'PASS' if passed else 'REVIEW'} — {len(deduped)} clean records"
+            + (f", mean quality {overall}/5 (threshold {qcfg.min_quality_score})." if judged else ".")
+        )
 
     return {
         "clean_records": deduped,
