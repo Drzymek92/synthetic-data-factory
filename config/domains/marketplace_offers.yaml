@@ -1,0 +1,69 @@
+# Domain spec — Allegro-style marketplace product listings ("offers").
+# Used to populate the marketplace-cx-agent demo with a richer offer catalogue.
+name: marketplace_offers
+description: Marketplace product listings spanning returnable and non-returnable categories.
+
+seed_file: scripts/inputs/seed_offers.json
+text_field: name
+label_fields: [category]
+
+fields:
+  name:
+    type: str
+    min_length: 8
+    max_length: 80
+    description: a realistic marketplace listing title (brand-ish name, model, size)
+  category:
+    type: enum
+    values: [electronics, fashion, home, sports, beauty, toys, garden, perishable, personalized, digital_unsealed]
+  price_pln:
+    type: int
+    ge: 5
+    le: 4000
+    description: price in whole PLN, realistic for the category
+  summary:
+    type: str
+    min_length: 10
+    max_length: 140
+    description: one-line description of the item
+
+generation:
+  system: >
+    You generate realistic, varied product listings ("offers") for an Allegro-style
+    Polish online marketplace. Titles read like real listings: specific names, models,
+    sizes. Prices are realistic for the category, in whole PLN. Spread listings across
+    ALL categories, including perishable, personalized, and digital_unsealed (which are
+    non-returnable). Return ONLY valid JSON, no prose.
+  instructions: >
+    Vary category, price, and product type widely; never reuse a product name. Include
+    several perishable / personalized / digital_unsealed items so non-returnable cases
+    are well represented.
+  scenario_hints:
+    - a flagship smartphone with a high price
+    - budget wireless earbuds
+    - a winter down jacket
+    - a stainless steel cookware set
+    - fresh roasted coffee beans (perishable)
+    - a personalized engraved photo frame (personalized)
+    - a downloadable software license key (digital_unsealed)
+    - a yoga mat and fitness gear
+    - a children's wooden building blocks set
+    - a robotic lawn mower (garden)
+    - a natural face serum (beauty)
+    - a mechanical keyboard
+    - an artisan chocolate box (perishable)
+    - a custom-printed t-shirt with a name (personalized)
+    - an e-book or game download bundle (digital_unsealed)
+    - a four-person camping tent
+
+chat_export:
+  system: Classify the marketplace offer category from its title and description.
+  user_template: "{name}\n\n{summary}"
+  assistant_template: "category: {category}"
+
+judge:
+  dimensions: [realism, category_fit]
+  system: >
+    Score a marketplace product listing on two integer 1-5 dimensions: realism (reads
+    like a real listing?) and category_fit (category matches the item?). Return ONLY
+    JSON: {"realism": int, "category_fit": int, "issue": "short note or empty string"}

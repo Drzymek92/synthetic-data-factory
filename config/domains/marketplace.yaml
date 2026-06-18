@@ -1,0 +1,183 @@
+# Domain spec — RELATIONAL (multi-table). Demonstrates referentially-linked entities:
+# sellers/buyers → offers → orders → order_items, with foreign-key integrity.
+#
+# CONTENT MODE: synthetic (deterministic, seeded, reproducible, no API call) is the DEFAULT.
+# An entity opts into LLM realism with `generate: llm` (only `offers` does so here — product
+# names benefit from it). Synthetic fields support a distribution configurator:
+#   enum:  weights: {VALUE: w, ...}        (weighted choice; omitted = uniform)
+#   int:   choices: [1, 1, 2, 3]           (sample from a set; omitted = uniform ge..le)
+#   date:  anchor: <ISO|today>, min_offset_days / max_offset_days  (relative day range)
+# Scale at the CLI: --scale 10  or  --count offers=200 orders=5000.
+#
+# Relational mode is triggered by the presence of an `entities` block (no top-level
+# `fields`/`text_field`/`label_fields`). Each entity is a mini flat-spec:
+#   - fields:        the CONTENT fields the LLM generates (same schema as a flat domain)
+#   - id_prefix:     prefix for the generated `id` (default: first 3 letters, upper)
+#   - count:         how many rows to generate (top-level entities)
+#   - per_parent:    {parent, min, max[, fk]} — emit min..max children per parent row
+#   - relationships: {fk_field: {ref: <entity>}} — FK assigned a real parent id in Python
+#   - generation:    per-entity prompt blocks (system/instructions/scenario_hints)
+# Generation order is derived automatically (parents before children).
+name: marketplace
+description: A relational marketplace graph — sellers, buyers, offers, orders, and order line items with FK integrity.
+mode: relational
+
+entities:
+
+  sellers:
+    id_prefix: SEL
+    count: 4
+    fields:
+      name:
+        type: str
+        min_length: 2
+        max_length: 60
+        description: marketplace shop/seller brand name
+      rating:
+        type: int
+        ge: 1
+        le: 5
+        description: seller reputation 1-5
+    generation:
+      system: >
+        You generate realistic marketplace seller records. Return ONLY valid JSON.
+      instructions: Vary shop names and ratings; names should look like real online shops.
+      scenario_hints:
+        - an electronics specialist shop
+        - a fashion boutique
+        - a home and garden store
+        - a sports equipment seller
+
+  buyers:
+    id_prefix: BUY
+    count: 6
+    label_fields: [smart, locale]
+    fields:
+      login:
+        type: str
+        min_length: 3
+        max_length: 30
+        description: a plausible marketplace username
+      smart:
+        type: enum
+        values: ["yes", "no"]              # quote — bare yes/no parse as YAML booleans
+        weights: {"yes": 3, "no": 7}       # ~30% Smart! members (configurator demo)
+      locale:
+        type: enum
+        values: [pl, en]
+    generation:
+      system: >
+        You generate realistic marketplace buyer accounts. Return ONLY valid JSON.
+      instructions: Vary logins and locales; mix Smart! (true) and non-Smart! (false) members.
+      scenario_hints:
+        - a frequent Smart! shopper in Poland
+        - an occasional English-locale buyer
+        - a new account with few orders
+
+  offers:
+    id_prefix: OFR
+    count: 8
+    generate: llm                 # opt INTO LLM realism — product names benefit from it
+    text_field: name              # dedup (flag-only) + diversity run on the listing title
+    label_fields: [category]
+    relationships:
+      seller_id: {ref: sellers}
+    judge:                        # per-entity LLM-as-judge (skipped by --no-judge)
+      dimensions: [realism, category_fit]
+      system: >
+        You are a strict data-quality reviewer for marketplace product listings. Score one
+        listing on two dimensions, each an integer 1-5 (5 = excellent):
+        - realism: does the name read like a real product title?
+        - category_fit: does the name match its stated category?
+        Return ONLY JSON: {"realism": int, "category_fit": int, "issue": "short note or empty"}
+    fields:
+      name:
+        type: str
+        min_length: 3
+        max_length: 100
+        description: product listing title
+      category:
+        type: enum
+        # The last three are NON-RETURNABLE in the agent's returns rule — included so the
+        # generated dataset exercises the non-returnable path, not only returnable goods.
+        values: [electronics, fashion, home, sports, beauty, toys, perishable, personalized, digital_unsealed]
+      price:
+        type: int
+        ge: 10
+        le: 9999
+        description: price in PLN
+    generation:
+      system: >
+        You generate realistic marketplace product listings. Return ONLY valid JSON.
+      instructions: >
+        Vary categories and prices; names should read like real product titles. Include
+        several perishable, personalized, and digital_unsealed items so the non-returnable
+        categories are well represented.
+      scenario_hints:
+        - wireless noise-cancelling headphones
+        - a slim winter down jacket
+        - a stainless steel cookware set
+        - a non-slip yoga mat
+        - a vitamin C face serum
+        - wooden building blocks for kids
+        - a fast-charging USB-C cable
+        - leather chelsea boots
+        - fresh roasted coffee beans (perishable)
+        - an artisan chocolate gift box (perishable)
+        - a personalized engraved photo frame (personalized)
+        - a custom-printed name t-shirt (personalized)
+        - a downloadable software license key (digital_unsealed)
+        - an e-book and game download bundle (digital_unsealed)
+
+  orders:
+    id_prefix: ORD
+    count: 10
+    label_fields: [status, delivery_method]
+    relationships:
+      buyer_id: {ref: buyers}
+      seller_id: {ref: sellers}
+    fields:
+      status:
+        type: enum
+        # PROCESSING included so the bundle exercises the buyer-protection eligibility branch,
+        # which the consuming agent treats as a distinct status (PAID/PROCESSING/SHIPPED/DELIVERED).
+        values: [NEW, PAID, PROCESSING, SHIPPED, DELIVERED, CANCELLED]
+        weights: {NEW: 1, PAID: 2, PROCESSING: 2, SHIPPED: 2, DELIVERED: 6, CANCELLED: 1}  # mostly delivered
+      delivery_method:
+        type: enum
+        values: [COURIER, PARCEL_LOCKER, PICKUP_POINT]
+      placed_at:
+        type: date                 # enables time-window testing (returns/dispute windows)
+        anchor: "2026-06-17"        # fixed anchor → reproducible; use "today" for relative
+        min_offset_days: -120       # spread across the last 120 days (in + out of windows)
+        max_offset_days: 0
+
+  order_items:
+    id_prefix: ITM                # synthetic by default — no LLM call for this structural table
+    per_parent: {parent: orders, min: 1, max: 3, fk: order_id}
+    relationships:
+      order_id: {ref: orders}
+      # Coherence: the chosen offer must belong to the same seller as the parent order.
+      # `field` = the column shared by offers and orders; `via` = the FK on this line
+      # item that points at the order carrying that value. (Avoid an `on:` key — YAML
+      # parses bare on/off/yes/no as booleans.)
+      offer_id:
+        ref: offers
+        match: {field: seller_id, via: order_id}
+    # Coherence: denormalize the offer's price onto the line item (not LLM-invented).
+    copy:
+      unit_price: {from: offer_id, field: price}
+    fields:
+      quantity:
+        type: int
+        ge: 1
+        le: 5
+        choices: [1, 1, 1, 2, 2, 3]   # skew toward 1-2 units (configurator demo)
+        description: number of units ordered
+    generation:
+      system: >
+        You generate realistic order line items. Return ONLY valid JSON.
+      instructions: Vary quantities; most line items are 1-2 units.
+      scenario_hints:
+        - a single unit
+        - a small multi-unit purchase

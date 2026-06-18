@@ -83,3 +83,28 @@ def export_dataset(
             written.append(p)
 
     return written
+
+
+def export_relational(
+    tables: dict[str, list[dict]],
+    spec: dict,
+    out_dir: Path,
+    timestamp: str,
+) -> list[Path]:
+    """Write one CSV per entity plus a single bundled JSON preserving the FK links.
+    Returns the paths written."""
+    name = spec["name"]
+    written: list[Path] = []
+
+    for ename, rows in tables.items():
+        p = write_csv(rows, out_dir / f"{name}_{ename}_{timestamp}.csv")
+        logger.info(f"Wrote {ename} CSV ({len(rows)} rows): {p}")
+        written.append(p)
+
+    bundle = out_dir / f"{name}_bundle_{timestamp}.json"
+    bundle.parent.mkdir(parents=True, exist_ok=True)
+    bundle.write_text(json.dumps(tables, ensure_ascii=False, indent=2), encoding="utf-8")
+    logger.info(f"Wrote relational bundle JSON: {bundle}")
+    written.append(bundle)
+
+    return written

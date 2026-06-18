@@ -73,3 +73,32 @@ def test_product_reviews_int_bounds_enforced():
     bad["rating"] = 9  # outside ge:1 le:5
     with pytest.raises(ValidationError):
         model(**bad)
+
+
+# --- YAML boolean-enum trap: unquoted [Yes, No]/[On, Off]/[True, False] are parsed by
+#     PyYAML as Python bools; coercing enum values to str must keep build_schema and
+#     field_spec_text from crashing (TypeError) on such a spec.
+
+def _bool_enum_spec() -> dict:
+    return {
+        "name": "bool_enum_domain",
+        "fields": {
+            "flag": {"type": "enum", "values": [True, False]},  # what PyYAML makes of [Yes, No]
+            "body": {"type": "str"},
+        },
+        "text_field": "body",
+        "label_fields": ["flag"],
+    }
+
+
+def test_build_schema_survives_bool_enum_values():
+    model = build_schema(_bool_enum_spec())
+    # bools coerce to their str form; the member value round-trips as a string
+    assert model(flag="True", body="x").model_dump(mode="json")["flag"] == "True"
+    with pytest.raises(ValidationError):
+        model(flag="Yes", body="x")  # "Yes" was never a member — only "True"/"False"
+
+
+def test_field_spec_text_survives_bool_enum_values():
+    text = field_spec_text(_bool_enum_spec())
+    assert "one of: True, False" in text

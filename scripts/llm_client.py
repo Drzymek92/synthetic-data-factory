@@ -69,3 +69,12 @@ def llm_json(prompt: str, system: str | None = None, model: str | None = None,
     messages.append(HumanMessage(content=prompt))
     chain = llm | JsonOutputParser()
     return chain.invoke(messages)
+
+
+def smoke_test(model: str | None = None) -> str:
+    """One tiny live call to verify gateway connectivity + credentials.
+
+    Raises with a clear message on any failure (missing env, auth, or network);
+    returns the model's reply on success. Used by `main.py --smoke`.
+    """
+    return llm_call("Reply with exactly: ok", model=model)
