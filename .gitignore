@@ -25,3 +25,7 @@ __pycache__/
 !scripts/inputs/seed_tickets.json
 !scripts/inputs/seed_reviews.json
 !tests/fixtures/*.json
+
+# portfolio diff snapshots (never pushed)
+.baseline_facts.json
+.current_facts.json
