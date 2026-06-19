@@ -8,6 +8,13 @@ generation:
   temperature: 0.9        # high on purpose — diversity matters more than determinism here
   seed: 42                # seeds scenario-hint sampling for reproducible runs
   max_retries: 3          # extra attempts to top up a short/invalid batch
+  pool:                   # pool-and-recombine for `generate: llm` entities (relational mode)
+    fraction: 0.10        # author >=10% of the required count with the LLM, recombine the rest
+    min_size: 20          # floor so small-N runs keep variety (10% of a tiny count is degenerate)
+    recombine: sample     # sample = whole-row (coherent) | shuffle = per-field (max variety)
+    #   - kicks in only when the resolved pool is smaller than the count (i.e. at scale);
+    #     otherwise the entity is generated in full. Override per entity with a `pool:` block,
+    #     or disable for one entity with `pool: false`.
 
 quality:
   dedup_threshold: 0.92   # cosine similarity at/above which two records are near-duplicates

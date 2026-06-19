@@ -78,6 +78,12 @@ entities:
     id_prefix: OFR
     count: 8
     generate: llm                 # opt INTO LLM realism — product names benefit from it
+    pool:                         # pool-and-recombine: author a small LLM pool, recombine to `count`
+      fraction: 0.25              # offers are realism-critical → richer pool than the 10% default
+      min_size: 20
+      recombine: sample           # whole-row draw → each recombined offer stays internally coherent
+      # Only activates when count > the resolved pool (i.e. at scale, e.g. --scale 10 / --count
+      # offers=500). At the demo count of 8 the pool meets the count, so all 8 are LLM-authored.
     text_field: name              # dedup (flag-only) + diversity run on the listing title
     label_fields: [category]
     relationships:
@@ -151,6 +157,19 @@ entities:
         anchor: "2026-06-17"        # fixed anchor → reproducible; use "today" for relative
         min_offset_days: -120       # spread across the last 120 days (in + out of windows)
         max_offset_days: 0
+    # Scenario / stratified injection — overlay GUARANTEED edge cases on a slice of the rows,
+    # applied after FK/copy assignment (content-only: may not set id/FK fields). Selectors:
+    # `fraction` (proportion), `count` (absolute), or `at_least` (guaranteed minimum). A `set`
+    # value is a literal OR a field-def dict reusing the distribution configurator (e.g. a date
+    # window). This is what makes the fixture precise for testing a consumer's branch logic.
+    scenarios:
+      - name: in_returns_window
+        fraction: 0.15             # ~15% of orders land inside the 14-day returns window
+        set:
+          placed_at: {type: date, anchor: "2026-06-17", min_offset_days: -13, max_offset_days: 0}
+      - name: guarantee_cancelled
+        at_least: 1                # never ship a sample with zero CANCELLED orders
+        set: {status: CANCELLED}
 
   order_items:
     id_prefix: ITM                # synthetic by default — no LLM call for this structural table

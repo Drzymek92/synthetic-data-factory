@@ -335,3 +335,187 @@ def test_export_relational_writes_files(fake_llm, marketplace_spec, tmp_path):
     assert len(bundles) == 1
     loaded = json.loads(bundles[0].read_text(encoding="utf-8"))
     assert set(loaded) == set(marketplace_spec["entities"])
+
+
+# --- Pool-and-recombine: amortize LLM cost (small pool → big N via sample/shuffle) ---
+
+def test_resolve_pool_default_floor_cap_and_overrides():
+    from scripts.relational import _resolve_pool
+    g = GenConfig()  # defaults: fraction 0.10, min_size 20, recombine "sample"
+    # fraction applies above the floor for large counts
+    size, recombine, _ = _resolve_pool({"generate": "llm"}, 1000, g)
+    assert size == 100 and recombine == "sample"
+    # floor lifts a tiny fraction up to min_size
+    assert _resolve_pool({"generate": "llm"}, 300, g)[0] == 30   # 10% = 30 > floor
+    assert _resolve_pool({"generate": "llm"}, 120, g)[0] == 20   # 10% = 12 -> floor 20
+    # when the resolved pool meets/exceeds the count, pooling buys nothing -> None
+    assert _resolve_pool({"generate": "llm"}, 8, g) is None
+    # explicit absolute size overrides fraction/floor
+    assert _resolve_pool({"generate": "llm", "pool": {"size": 30}}, 1000, g)[0] == 30
+    # explicit opt-out -> generate all directly
+    assert _resolve_pool({"generate": "llm", "pool": False}, 1000, g) is None
+
+
+def test_recombine_sample_caps_distinct_at_pool_size():
+    from scripts.relational import _recombine
+    import random
+    pool = [{"name": f"n{i}", "price": i} for i in range(5)]
+    out = _recombine(pool, 50, "sample", None, random.Random(0))
+    assert len(out) == 50
+    assert len({r["name"] for r in out}) <= 5            # whole-row draw -> <= pool size
+    pool_rows = {(r["name"], r["price"]) for r in pool}
+    assert all((r["name"], r["price"]) in pool_rows for r in out)  # every row coherent/verbatim
+
+
+def test_recombine_shuffle_exceeds_pool_size_distinct():
+    from scripts.relational import _recombine
+    import random
+    pool = [{"a": i, "b": i} for i in range(5)]
+    out = _recombine(pool, 300, "shuffle", ["a", "b"], random.Random(0))
+    assert len(out) == 300
+    combos = {(r["a"], r["b"]) for r in out}
+    assert len(combos) > 5                               # independent field draws -> off-diagonal
+
+
+def test_pool_recombine_used_for_llm_entity_at_scale(monkeypatch):
+    calls = {"n": 0}
+
+    def fake(prompt, system=None, model=None, temperature=0.0, **kwargs):
+        calls["n"] += 1
+        return {"records": [
+            {"name": f"prod_{calls['n']}_{j}", "category": "electronics", "price": 100 + j}
+            for j in range(5)
+        ]}
+
+    monkeypatch.setattr(llm_client, "llm_json", fake)
+    spec = {"name": "p", "entities": {"offers": {
+        "id_prefix": "OFR", "count": 100, "generate": "llm",
+        "fields": {
+            "name": {"type": "str"},
+            "category": {"type": "enum", "values": ["electronics"]},
+            "price": {"type": "int", "ge": 1, "le": 9999},
+        },
+    }}}
+    tables = generate_relational(GenConfig(seed=1), spec)
+    assert len(tables["offers"]) == 100
+    # pool floored at 20 (<< 100) -> far fewer distinct authored rows than the final count
+    assert len({r["name"] for r in tables["offers"]}) <= 20
+
+
+def test_pool_opt_out_generates_all_via_llm(monkeypatch):
+    authored = {"names": set()}
+
+    def fake(prompt, system=None, model=None, temperature=0.0, **kwargs):
+        recs = [{"name": f"u{len(authored['names']) + j}",
+                 "category": "electronics", "price": 100} for j in range(5)]
+        authored["names"].update(r["name"] for r in recs)
+        return {"records": recs}
+
+    monkeypatch.setattr(llm_client, "llm_json", fake)
+    spec = {"name": "p", "entities": {"offers": {
+        "id_prefix": "OFR", "count": 40, "generate": "llm", "pool": False,
+        "fields": {
+            "name": {"type": "str"},
+            "category": {"type": "enum", "values": ["electronics"]},
+            "price": {"type": "int", "ge": 1, "le": 9999},
+        },
+    }}}
+    tables = generate_relational(GenConfig(seed=1), spec)
+    assert len(tables["offers"]) == 40
+    # opt-out: every final row is an independently-authored LLM row (no recombination repeats)
+    assert len({r["name"] for r in tables["offers"]}) == 40
+
+
+# --- Scenario / stratified injection: prescribe guaranteed edge cases over a slice ---
+
+def test_scenario_fraction_sets_field_on_slice():
+    from scripts.relational import _apply_scenarios
+    import random
+    rows = [{"status": "DELIVERED"} for _ in range(100)]
+    espec = {"scenarios": [{"name": "cancel", "fraction": 0.2, "set": {"status": "CANCELLED"}}]}
+    _apply_scenarios(rows, espec, random.Random(0))
+    assert sum(r["status"] == "CANCELLED" for r in rows) == 20
+
+
+def test_scenario_at_least_guarantees_minimum_even_on_small_n():
+    from scripts.relational import _apply_scenarios
+    import random
+    rows = [{"status": "DELIVERED"} for _ in range(5)]
+    espec = {"scenarios": [{"name": "one_cancel", "at_least": 1, "set": {"status": "CANCELLED"}}]}
+    _apply_scenarios(rows, espec, random.Random(0))
+    assert sum(r["status"] == "CANCELLED" for r in rows) >= 1
+
+
+def test_scenario_fielddef_value_uses_distribution_config():
+    from scripts.relational import _apply_scenarios
+    from datetime import date
+    import random
+    rows = [{"placed_at": "2026-01-01"} for _ in range(50)]
+    espec = {"scenarios": [{"name": "returns_window", "fraction": 1.0, "set": {
+        "placed_at": {"type": "date", "anchor": "2026-06-17",
+                      "min_offset_days": -13, "max_offset_days": 0}}}]}
+    _apply_scenarios(rows, espec, random.Random(0))
+    for r in rows:
+        d = date.fromisoformat(r["placed_at"])
+        assert date(2026, 6, 4) <= d <= date(2026, 6, 17)
+
+
+def test_scenarios_forbid_fk_and_id_fields(tmp_path):
+    (tmp_path / "bad.yaml").write_text(
+        "name: bad\n"
+        "entities:\n"
+        "  parent:\n"
+        "    fields: {x: {type: str}}\n"
+        "  child:\n"
+        "    fields: {y: {type: str}}\n"
+        "    relationships: {p_id: {ref: parent}}\n"
+        "    scenarios:\n"
+        "      - name: hijack_fk\n"
+        "        fraction: 0.5\n"
+        "        set: {p_id: HACK}\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError):
+        load_domain("bad", domains_dir=tmp_path)
+
+
+def test_scenarios_reproducible_across_seeded_runs():
+    spec = {"name": "rep", "entities": {"orders": {
+        "id_prefix": "ORD", "count": 200,
+        "fields": {"status": {"type": "enum", "values": ["DELIVERED", "CANCELLED"]}},
+        "scenarios": [{"name": "force", "fraction": 0.25, "set": {"status": "CANCELLED"}}],
+    }}}
+    a = generate_relational(GenConfig(seed=7), spec)["orders"]
+    b = generate_relational(GenConfig(seed=7), spec)["orders"]
+    assert a == b   # all-synthetic + scenarios -> byte-identical
+
+
+# --- The combination: pooled LLM content + scenario overlay in one relational run ---
+
+def test_pool_and_scenarios_combine(monkeypatch):
+    def fake(prompt, system=None, model=None, temperature=0.0, **kwargs):
+        return {"records": [
+            {"name": f"prod{j}", "category": "electronics", "price": 100} for j in range(5)
+        ]}
+
+    monkeypatch.setattr(llm_client, "llm_json", fake)
+    spec = {"name": "combo", "entities": {
+        "offers": {
+            "id_prefix": "OFR", "count": 60, "generate": "llm",
+            "fields": {
+                "name": {"type": "str"},
+                "category": {"type": "enum", "values": ["electronics"]},
+                "price": {"type": "int", "ge": 1, "le": 9999},
+            },
+        },
+        "orders": {
+            "id_prefix": "ORD", "count": 100,
+            "fields": {"status": {"type": "enum", "values": ["DELIVERED", "CANCELLED"],
+                                  "weights": {"DELIVERED": 9, "CANCELLED": 1}}},
+            "scenarios": [{"name": "force_cancel", "fraction": 0.3, "set": {"status": "CANCELLED"}}],
+        },
+    }}
+    tables = generate_relational(GenConfig(seed=1), spec)
+    assert len(tables["offers"]) == 60
+    assert len({r["name"] for r in tables["offers"]}) <= 20          # pool recombined (content layer)
+    assert sum(o["status"] == "CANCELLED" for o in tables["orders"]) >= 30  # scenario floor (overlay layer)

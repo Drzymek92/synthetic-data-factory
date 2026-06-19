@@ -17,6 +17,7 @@ def load_domain(name: str, domains_dir: Path = Path("config/domains")) -> dict:
     if is_relational(spec):
         _require(spec, ["name", "entities"])
         _validate_relationships(spec)
+        _validate_scenarios(spec)
     else:
         _require(spec, ["name", "fields", "text_field", "label_fields"])
     return spec
@@ -47,6 +48,29 @@ def _validate_relationships(spec: dict) -> None:
             raise ValueError(
                 f"Entity '{ename}' per_parent references unknown parent '{pp.get('parent')}'"
             )
+
+
+def _validate_scenarios(spec: dict) -> None:
+    """Fail fast on a scenario that would break referential integrity. Scenario `set` blocks
+    are content-only — they may not overwrite an entity's id or any FK field, since those are
+    assigned to guarantee FK integrity and an overlay would silently orphan a reference."""
+    for ename, espec in spec["entities"].items():
+        protected = {id_field_of(espec)} | set(espec.get("relationships", {}))
+        for sc in espec.get("scenarios") or []:
+            name = sc.get("name", "?")
+            if not sc.get("set"):
+                raise ValueError(f"Entity '{ename}' scenario '{name}' has an empty/missing `set` block")
+            if not ({"fraction", "count", "at_least"} & set(sc)):
+                raise ValueError(
+                    f"Entity '{ename}' scenario '{name}' needs a selector "
+                    f"(`fraction`, `count`, or `at_least`)"
+                )
+            bad = protected & set(sc["set"])
+            if bad:
+                raise ValueError(
+                    f"Entity '{ename}' scenario '{name}' may not set id/FK field(s) {sorted(bad)} "
+                    f"— scenarios are content-only to preserve referential integrity"
+                )
 
 
 def entity_content_spec(entity_name: str, entity_spec: dict) -> dict:

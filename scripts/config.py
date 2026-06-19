@@ -13,6 +13,13 @@ class GenConfig:
     temperature: float = 0.9
     seed: int = 42
     max_retries: int = 3
+    # Pool-and-recombine defaults for `generate: llm` entities (relational mode). The LLM
+    # authors a small pool, then Python recombines it up to the required count — amortizing
+    # the per-row API cost. Standardised here so every project/domain inherits the policy;
+    # a per-entity `pool:` block overrides any of these (or `pool: false` opts out).
+    pool_fraction: float = 0.10   # author >= this share of the required count with the LLM
+    pool_min_size: int = 20       # never fewer than this many real LLM rows (small-N safety)
+    pool_recombine: str = "sample"  # "sample" = whole-row (coherent) | "shuffle" = per-field
 
 
 @dataclass
@@ -73,12 +80,16 @@ def load_config(
     domain_name = overrides.get("domain", raw.get("domain", "support_tickets"))
     domain_spec = load_domain(domain_name)
 
+    pool_raw = gen_raw.get("pool", {}) or {}
     gen = GenConfig(
         n_records=overrides.get("n_records", gen_raw.get("n_records", GenConfig.n_records)),
         batch_size=gen_raw.get("batch_size", GenConfig.batch_size),
         temperature=gen_raw.get("temperature", GenConfig.temperature),
         seed=gen_raw.get("seed", GenConfig.seed),
         max_retries=gen_raw.get("max_retries", GenConfig.max_retries),
+        pool_fraction=pool_raw.get("fraction", GenConfig.pool_fraction),
+        pool_min_size=pool_raw.get("min_size", GenConfig.pool_min_size),
+        pool_recombine=pool_raw.get("recombine", GenConfig.pool_recombine),
     )
     quality = QualityConfig(
         dedup_threshold=qual_raw.get("dedup_threshold", QualityConfig.dedup_threshold),

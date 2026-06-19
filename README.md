@@ -5,7 +5,7 @@
 ![Python](https://img.shields.io/badge/python-3.12-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![CI](https://github.com/Drzymek92/synthetic-data-factory/actions/workflows/ci.yml/badge.svg)
-![Tests](https://img.shields.io/badge/tests-62_passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-73_passing-brightgreen)
 
 ## Overview
 
@@ -17,6 +17,8 @@ The defining design choice: **a dataset type is defined entirely in YAML** — f
 
 - **Config-driven domains** — schema, prompts, scenario hints, judge criteria, and chat-export mapping all live in one `config/domains/<name>.yaml`. A Pydantic model is built from the spec at runtime.
 - **Relational (multi-table) generation** — an `entities` block defines FK-linked tables generated parents-first; IDs and foreign keys are assigned deterministically in Python (guaranteeing referential integrity) while the LLM fills only the content fields. Per-field distribution controls (enum weights, value choices, relative date ranges), `--scale`/`--count` sizing, and a queryable DuckDB export with `PRIMARY KEY`/`FOREIGN KEY` constraints.
+- **Pool-and-recombine** — for `generate: llm` entities, the LLM authors a small pool of rows once and Python recombines them (sample-with-replacement) up to the required count, amortizing per-row API cost at scale. Configurable per entity (`pool:` block) or globally; `sample` mode keeps whole-row coherence, `shuffle` mode maximizes per-field variety. Kicks in only when the pool is smaller than the count, so small runs are untouched.
+- **Scenario / edge-case injection** — a `scenarios:` list guarantees edge-case proportions in the output: select a slice by fraction, absolute count, or `at_least` minimum and overwrite fields with literals or distribution-configured values (e.g. "15% of orders in the returns window", "≥1 cancelled order"). Applied last and content-only (FK/id targets rejected at load) so referential integrity always holds — making the dataset a precise fixture for testing a consumer's branch logic.
 - **Batched LLM generation** with rotating scenario hints for diversity; every record is schema-validated and short batches are topped up automatically.
 - **Reusable, domain-agnostic quality harness** that works on *any* list of record dicts — synthetic or real labeled data:
   - Pydantic schema validation + per-field coverage
@@ -25,7 +27,7 @@ The defining design choice: **a dataset type is defined entirely in YAML** — f
   - LLM-as-judge scoring (criteria defined per domain) with flagged low-quality records
 - **Two output formats** — dataset CSV and fine-tuning-ready chat JSONL (`{"messages": [...]}`), plus a Markdown quality report.
 - **Runs offline** — `--evaluate` an existing dataset and/or `--no-judge` to exercise the whole harness with no API calls.
-- **Tested** — 62 pytest tests, including the LLM stages exercised offline with mocked calls and the relational FK-integrity guarantees.
+- **Tested** — 73 pytest tests, including the LLM stages exercised offline with mocked calls and the relational FK-integrity, pool-recombination, and scenario-injection guarantees.
 
 ## Architecture / How it works
 
@@ -50,7 +52,7 @@ flowchart TD
 
 The quality harness (`scripts/quality/`) is self-contained and depends on nothing about how the data was produced — point it at a real labeled export and it scores that just as well.
 
-For **relational domains** (`mode: relational`), `scripts/relational.py` generates entities in dependency order, draws real parent IDs for every foreign key, denormalizes parent fields where a spec requests it, and verifies referential integrity before exporting CSVs, a single bundle JSON, and a constrained `.duckdb` file other projects can `JOIN` against directly.
+For **relational domains** (`mode: relational`), `scripts/relational.py` generates entities in dependency order, draws real parent IDs for every foreign key, denormalizes parent fields where a spec requests it, and verifies referential integrity before exporting CSVs, a single bundle JSON, and a constrained `.duckdb` file other projects can `JOIN` against directly. At scale, an LLM entity can author a small **pool** of rows and recombine them up to the requested count (cost amortization), and any entity can overlay **scenarios** that guarantee edge-case proportions — both applied with the seeded RNG, so a fully-synthetic run is byte-reproducible across seeds.
 
 ## Tech Stack
 
@@ -159,7 +161,7 @@ synthetic-data-factory/
 │   │   ├── judge.py              # LLM-as-judge (criteria from the domain spec)
 │   │   └── report.py             # Markdown quality report
 │   └── inputs/                   # few-shot seed files
-└── tests/                        # 62 pytest tests
+└── tests/                        # 73 pytest tests
 ```
 
 ## License

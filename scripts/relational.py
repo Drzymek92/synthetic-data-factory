@@ -7,6 +7,7 @@ Entities are generated parents-first (topological order over relationships + per
 """
 from dataclasses import replace
 from datetime import date, timedelta
+import math
 import random
 
 from scripts.config import GenConfig
@@ -113,6 +114,59 @@ def _synthetic_fill(espec: dict, n: int, rng: random.Random) -> list[dict]:
     return [{fn: _synthetic_value(fn, fd, i, rng) for fn, fd in fields.items()} for i in range(n)]
 
 
+def _resolve_pool(espec: dict, count: int, gen_cfg: GenConfig):
+    """Decide whether an LLM entity uses pool-and-recombine, and how.
+
+    Returns `(pool_size, recombine, fields)` to author a small pool of `pool_size` rows and
+    recombine up to `count`, or `None` to generate all `count` rows with the LLM directly.
+
+    Resolution (per-entity `pool:` block overrides the GenConfig/global defaults):
+      - `pool: false`            -> None (opt out, full LLM generation)
+      - `pool: {size: N}`        -> exactly N pool rows
+      - else  pool = max(min_size, ceil(fraction * count)), capped at `count`
+    Pooling is skipped (None) whenever the resolved pool meets/exceeds `count` — at that
+    point it would author as many rows as it saves, so there is nothing to amortize.
+    """
+    pcfg = espec.get("pool")
+    if pcfg is False:
+        return None
+    pcfg = pcfg or {}
+    if pcfg.get("size") is not None:
+        size = int(pcfg["size"])
+    else:
+        fraction = pcfg.get("fraction", gen_cfg.pool_fraction)
+        min_size = pcfg.get("min_size", gen_cfg.pool_min_size)
+        size = max(int(min_size), math.ceil(fraction * count))
+    size = min(size, count)
+    if size >= count:
+        return None
+    return size, pcfg.get("recombine", gen_cfg.pool_recombine), pcfg.get("fields")
+
+
+def _recombine(pool: list[dict], count: int, strategy: str,
+               fields: list[str] | None, rng: random.Random) -> list[dict]:
+    """Expand a small content `pool` up to `count` rows (sampling with replacement).
+
+    `sample`  — draw whole pool rows: field combinations stay internally coherent, but the
+                number of distinct rows is capped at the pool size.
+    `shuffle` — draw each (listed) field independently from a random pool row: yields up to
+                pool_size**k combinations (far more variety) at the cost of cross-field
+                coherence. `fields` limits which columns are shuffled (default: all).
+    """
+    if not pool:
+        return []
+    if strategy == "shuffle":
+        keys = fields or list(pool[0].keys())
+        out = []
+        for _ in range(count):
+            row = dict(rng.choice(pool))
+            for k in keys:
+                row[k] = rng.choice(pool)[k]
+            out.append(row)
+        return out
+    return [dict(rng.choice(pool)) for _ in range(count)]   # "sample" (default)
+
+
 def _gen_content(entity_name: str, espec: dict, gen_cfg: GenConfig, count: int,
                  seeds: list[dict] | None, model: str | None,
                  rng: random.Random) -> list[dict]:
@@ -121,7 +175,17 @@ def _gen_content(entity_name: str, espec: dict, gen_cfg: GenConfig, count: int,
     if _is_synthetic(espec):
         return _synthetic_fill(espec, count, rng)
     flat = entity_content_spec(entity_name, espec)
-    return generate_records(replace(gen_cfg, n_records=count), flat, seeds or [], model=model)
+    pool = _resolve_pool(espec, count, gen_cfg)
+    if pool is None:
+        return generate_records(replace(gen_cfg, n_records=count), flat, seeds or [], model=model)
+    pool_size, recombine, fields = pool
+    logger.info(
+        f"{entity_name}: pool-and-recombine — LLM pool of {pool_size} → {count} rows via {recombine}"
+    )
+    base = generate_records(replace(gen_cfg, n_records=pool_size), flat, seeds or [], model=model)
+    if not base:
+        return []
+    return _recombine(base, count, recombine, fields, rng)
 
 
 def _resolve_row(tables: dict, spec: dict, entity: str, id_value) -> dict | None:
@@ -176,6 +240,50 @@ def _apply_copies(record: dict, espec: dict, tables: dict, spec: dict) -> None:
         ref = rels.get(cdef["from"], {}).get("ref")
         row = _resolve_row(tables, spec, ref, record.get(cdef["from"])) if ref else None
         record[tgt] = row.get(cdef["field"]) if row else None
+
+
+def _scenario_count(sc: dict, n: int) -> int:
+    """How many of `n` rows a scenario targets: `fraction` (proportion, rounded),
+    `count` (absolute), or `at_least` (guaranteed minimum). Capped at `n`."""
+    if "fraction" in sc:
+        k = round(sc["fraction"] * n)
+    elif "count" in sc:
+        k = int(sc["count"])
+    elif "at_least" in sc:
+        k = int(sc["at_least"])
+    else:
+        k = 0
+    return max(0, min(k, n))
+
+
+def _scenario_value(fname: str, val, i: int, rng: random.Random):
+    """A scenario `set` value is either a literal, or a field-def dict (`{type: ...}`) that
+    reuses the distribution configurator — so e.g. a date window or weighted enum can be
+    injected, not just a constant."""
+    if isinstance(val, dict) and "type" in val:
+        return _synthetic_value(fname, val, i, rng)
+    return val
+
+
+def _apply_scenarios(rows: list[dict], espec: dict, rng: random.Random) -> None:
+    """Overlay edge-case scenarios onto a slice of an entity's rows, in spec order.
+
+    Each scenario selects a subset (by `fraction`/`count`/`at_least`) and overwrites the
+    fields in its `set` block — guaranteeing controlled proportions of edge cases (e.g.
+    "20% of orders in the returns window", "at_least 1 CANCELLED"). Runs LAST, after FK and
+    copy assignment, so the overlay wins; `set` is content-only (FK/id fields are rejected at
+    load time) so referential integrity is preserved. Uses the seeded `rng` → reproducible."""
+    n = len(rows)
+    if n == 0:
+        return
+    for sc in espec.get("scenarios") or []:
+        k = _scenario_count(sc, n)
+        if k <= 0:
+            continue
+        for i in rng.sample(range(n), k):
+            for fname, val in (sc.get("set") or {}).items():
+                rows[i][fname] = _scenario_value(fname, val, i, rng)
+        logger.info(f"scenario '{sc.get('name', '?')}': set {k}/{n} row(s)")
 
 
 def _with_ids(rows: list[dict], espec: dict) -> list[dict]:
@@ -242,6 +350,9 @@ def generate_relational(gen_cfg: GenConfig, spec: dict,
                 f"{ename}.{fk_field}: {n} pick(s) fell back to unconstrained "
                 f"(no parent matched the `match` constraint)"
             )
+
+        # Scenario overlay: applied last (after content + FK + copy) so it wins, content-only.
+        _apply_scenarios(rows, espec, rng)
 
         espec_named = {**espec, "__name__": ename}
         tables[ename] = _with_ids(rows, espec_named)
